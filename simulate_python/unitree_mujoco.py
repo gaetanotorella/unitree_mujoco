@@ -18,7 +18,9 @@ mj_data = mujoco.MjData(mj_model)
 
 if config.ENABLE_ELASTIC_BAND:
     elastic_band = ElasticBand()
-    if config.ROBOT == "h1" or config.ROBOT == "g1":
+    if config.ROBOT in ["h1", "g1"]:
+        band_attached_link = mj_model.body("torso_link").id
+    elif config.ROBOT == "h1_2":
         band_attached_link = mj_model.body("torso_link").id
     else:
         band_attached_link = mj_model.body("base_link").id
@@ -28,6 +30,10 @@ if config.ENABLE_ELASTIC_BAND:
 else:
     viewer = mujoco.viewer.launch_passive(mj_model, mj_data)
 
+with viewer.lock():
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = True
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = True
+    
 mj_model.opt.timestep = config.SIMULATE_DT
 num_motor_ = mj_model.nu
 dim_motor_sensor_ = 3 * num_motor_
@@ -46,6 +52,15 @@ def SimulationThread():
     if config.PRINT_SCENE_INFORMATION:
         unitree.PrintSceneInformation()
 
+    gt_logger = None
+    if getattr(config, "ENABLE_STATE_LOG", False):
+        from state_logger import GroundTruthLogger
+        gt_logger = GroundTruthLogger(
+            mj_model,
+            out_dir=config.STATE_LOG_DIR,
+            log_dt=getattr(config, "STATE_LOG_DT", 0.01),
+        )
+
     while viewer.is_running():
         step_start = time.perf_counter()
 
@@ -57,6 +72,8 @@ def SimulationThread():
                     mj_data.qpos[:3], mj_data.qvel[:3]
                 )
         mujoco.mj_step(mj_model, mj_data)
+        if gt_logger is not None:
+            gt_logger.log(mj_data)
 
         locker.release()
 
@@ -65,6 +82,9 @@ def SimulationThread():
         )
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
+
+    if gt_logger is not None:
+        gt_logger.close()
 
 
 def PhysicsViewerThread():

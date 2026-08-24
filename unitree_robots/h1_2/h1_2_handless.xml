@@ -37,7 +37,7 @@
   </asset>
 
   <worldbody>
-    <body name="pelvis" pos="0 0 1.03">
+    <body name="pelvis" pos="0 0 1.01">
       <inertial pos="-0.0004 3.7e-05 -0.046864" quat="0.497097 0.496809 -0.503132 0.502925" mass="5.983" diaginertia="0.0531565 0.0491678 0.00902583"/>
       <joint name="floating_base_joint" type="free" limited="false" actuatorfrclimited="false"/>
       <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.1 0.1 0.1 1" mesh="pelvis"/>
@@ -296,16 +296,16 @@
     <jointactuatorfrc name="left_knee_torque" joint="left_knee_joint" />
     <jointactuatorfrc name="left_ankle_pitch_torque" joint="left_ankle_pitch_joint" />
     <jointactuatorfrc name="left_ankle_roll_torque" joint="left_ankle_roll_joint" />
+    <jointactuatorfrc name="right_hip_yaw_torque" joint="right_hip_yaw_joint" />
     <jointactuatorfrc name="right_hip_pitch_torque" joint="right_hip_pitch_joint" />
     <jointactuatorfrc name="right_hip_roll_torque" joint="right_hip_roll_joint" />
-    <jointactuatorfrc name="right_hip_yaw_torque" joint="right_hip_yaw_joint" />
     <jointactuatorfrc name="right_knee_torque" joint="right_knee_joint" />
     <jointactuatorfrc name="right_ankle_pitch_torque" joint="right_ankle_pitch_joint" />
     <jointactuatorfrc name="right_ankle_roll_torque" joint="right_ankle_roll_joint" />
     <jointactuatorfrc name="torso_joint_torque" joint="torso_joint" />
-    <jointactuatorfrc name="left_shoulder_yaw_torque" joint="left_shoulder_yaw_joint" />
     <jointactuatorfrc name="left_shoulder_pitch_torque" joint="left_shoulder_pitch_joint" />
     <jointactuatorfrc name="left_shoulder_roll_torque" joint="left_shoulder_roll_joint" />
+    <jointactuatorfrc name="left_shoulder_yaw_torque" joint="left_shoulder_yaw_joint" />
     <jointactuatorfrc name="left_elbow_torque" joint="left_elbow_joint" />
     <jointactuatorfrc name="left_wrist_roll_torque" joint="left_wrist_roll_joint" />
     <jointactuatorfrc name="left_wrist_pitch_torque" joint="left_wrist_pitch_joint" />
@@ -318,11 +318,22 @@
     <jointactuatorfrc name="right_wrist_pitch_torque" joint="right_wrist_pitch_joint" />
     <jointactuatorfrc name="right_wrist_yaw_torque" joint="right_wrist_yaw_joint" />
 
-    <framequat name="imu_quat" objtype="site" objname="imu" />
-    <gyro name="imu_gyro" site="imu" />
-    <accelerometer name="imu_acc" site="imu" />
-
-    <framepos name="frame_pos" objtype="site" objname="imu" />
-    <framelinvel name="frame_vel" objtype="site" objname="imu" />
+    <!-- IMU — ordine fisso atteso dal bridge: quat(4) gyro(3) accel(3) framepos(3) framelinvel(3) -->
+    <framequat    name="imu_quat" objtype="site" objname="imu"/>
+    <gyro         name="imu_gyro" site="imu"/>
+    <accelerometer name="imu_acc" site="imu"/>
+    <framepos     name="frame_pos" objtype="site" objname="imu"/>
+    <framelinvel  name="frame_vel" objtype="site" objname="imu"/>
   </sensor>
+
+  <!-- <weld> RIMOSSO: saldava rigidamente il torso al mondo (bloccava tutti i 6
+       DOF, incluse le rotazioni) -> mentre attivo la policy non poteva equilibrarsi
+       e si assestava col torso indietro al rilascio. Sostituito dall'ElasticBand
+       (molla verticale, ENABLE_ELASTIC_BAND=True in config.py): sostiene il peso
+       lasciando il torso libero di ruotare, con rilascio graduale (tasti 7/8/9). -->
+  <!--
+  <equality>
+    <weld body1="torso_link" body2="world"/>
+  </equality>
+  -->
 </mujoco>

@@ -1,0 +1,32 @@
+<mujoco model="Unitree H1-2 condim6">
+  <!-- ESPERIMENTO C (gap sim2sim, 2026-07-20): identica a scene.xml ma il
+       pavimento ha condim=6 + attrito TORSIONALE e di ROTOLAMENTO non trascurabili.
+       Il contatto piede-pavimento eredita condim = max(piede=3, floor=6) = 6, quindi
+       resiste anche al PIVOT del piede attorno alla normale (che con condim=3 di
+       default e' quasi libero -> deriva lenta osservata solo in MuJoCo).
+       friction = "slide torsion roll": alziamo torsion (0.005->0.1) e roll
+       (0.0001->0.01) rispetto ai default MuJoCo.
+       Se con questa scena la deriva SPARISCE, la causa e' l'attrito torsionale
+       mancante (il piede vero, con suola gommata piatta, ce l'ha). Usare con
+       ROBOT_SCENE = ".../scene_condim6.xml" in config.py. NON e' il modello di
+       riferimento: la validazione sim2real finale resta su scene.xml. -->
+  <include file="h1_2.xml" />
+  <statistic center="1 0.7 1.5" extent="0.8" />
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.6 0.6 0.6" specular="0.9 0.9 0.9"/>
+    <rgba haze="0.15 0.25 0.35 1" />
+    <global azimuth="-140" elevation="-30" />
+  </visual>
+  <asset>
+    <texture type="skybox" builtin="flat" rgb1="0 0 0" rgb2="0 0 0" width="512" height="3072" />
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4"
+      rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300" />
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5"
+      reflectance="0.2" />
+  </asset>
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true" />
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"
+          condim="6" priority="1" friction="1 0.1 0.01" />
+  </worldbody>
+</mujoco>

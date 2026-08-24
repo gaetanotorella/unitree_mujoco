@@ -13,7 +13,7 @@ from unitree_sdk2py.idl.default import unitree_go_msg_dds__WirelessController_
 from unitree_sdk2py.utils.thread import RecurrentThread
 
 import config
-if config.ROBOT=="g1":
+if config.ROBOT in ["g1", "h1", "h1_2"]:
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
     from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
@@ -43,6 +43,8 @@ class UnitreeSdk2Bridge:
         self.have_frame_sensor = False
         self.dt = self.mj_model.opt.timestep
         self.idl_type = (self.num_motor > NUM_MOTOR_IDL_GO) # 0: unitree_go, 1: unitree_hg
+        # Cap to IDL array size: unitree_hg has 35 motor slots, unitree_go has 20
+        self.num_motor_ctrl = min(self.num_motor, 35 if self.idl_type else NUM_MOTOR_IDL_GO)
 
         self.joystick = None
 
@@ -110,7 +112,7 @@ class UnitreeSdk2Bridge:
 
     def LowCmdHandler(self, msg: LowCmd_):
         if self.mj_data != None:
-            for i in range(self.num_motor):
+            for i in range(self.num_motor_ctrl):
                 self.mj_data.ctrl[i] = (
                     msg.motor_cmd[i].tau
                     + msg.motor_cmd[i].kp
@@ -124,7 +126,11 @@ class UnitreeSdk2Bridge:
 
     def PublishLowState(self):
         if self.mj_data != None:
-            for i in range(self.num_motor):
+            # Clock della simulazione in ms nel campo tick (sul robot reale lo
+            # imposta il firmware): permette di allineare i log del controller
+            # di deploy con ground_truth.csv del simulatore.
+            self.low_state.tick = int(self.mj_data.time * 1000) % (2**32)
+            for i in range(self.num_motor_ctrl):
                 self.low_state.motor_state[i].q = self.mj_data.sensordata[i]
                 self.low_state.motor_state[i].dq = self.mj_data.sensordata[
                     i + self.num_motor
