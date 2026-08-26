@@ -214,12 +214,15 @@ class UnitreeSdk2Bridge:
                     2,
                 )
                 # Axes
-                sticks = [
-                    self.joystick.get_axis(self.axis_id["LX"]),
-                    self.joystick.get_axis(self.axis_id["RX"]),
-                    -self.joystick.get_axis(self.axis_id["RY"]),
-                    -self.joystick.get_axis(self.axis_id["LY"]),
-                ]
+                # sticks = [
+                #     self.joystick.get_axis(self.axis_id["LX"]),
+                #     self.joystick.get_axis(self.axis_id["RX"]),
+                #     -self.joystick.get_axis(self.axis_id["RY"]),
+                #     -self.joystick.get_axis(self.axis_id["LY"]),
+                # ]
+                # DEBUG - set sticks to 0.0 to avoid sending joystick commands to the robot
+                sticks = [0.0, 0.0, 0.0, 0.0]
+
                 packs = list(map(lambda x: struct.pack("f", x), sticks))
                 self.low_state.wireless_remote[4:8] = packs[0]
                 self.low_state.wireless_remote[8:12] = packs[1]
