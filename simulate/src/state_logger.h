@@ -40,7 +40,7 @@ inline double wall_seconds()
 inline std::string base_log_dir()
 {
     const char *home = std::getenv("HOME");
-    return (home ? std::string(home) : std::string(".")) + "/sim_logs";
+    return (home ? std::string(home) : std::string(".")) + "/unitree_ws/sim_logs";
 }
 
 // Da chiamare a ogni passo fisico (con downsampling interno a ~100 Hz).

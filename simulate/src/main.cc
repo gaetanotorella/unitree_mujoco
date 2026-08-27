@@ -519,7 +519,7 @@ namespace
             if (stepped)
             {
               sim.AddToHistory();
-              sim_logger::log_ground_truth(d); // ground-truth base -> sim_logs/sim_<ts>/
+              sim_logger::log_ground_truth(d); // ground-truth base -> unitree_ws/sim_logs/sim_<ts>/
             }
           }
 
