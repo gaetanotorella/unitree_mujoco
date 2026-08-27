@@ -34,6 +34,7 @@
 #include "array_safety.h"
 #include "unitree_sdk2_bridge.h"
 #include "param.h"
+#include "state_logger.h"
 
 #define MUJOCO_PLUGIN_DIR "mujoco_plugin"
 #define NUM_MOTOR_IDL_GO 20
@@ -518,6 +519,7 @@ namespace
             if (stepped)
             {
               sim.AddToHistory();
+              sim_logger::log_ground_truth(d); // ground-truth base -> sim_logs/sim_<ts>/
             }
           }
 
