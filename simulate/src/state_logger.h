@@ -16,6 +16,7 @@
 #include <chrono>
 #include <ctime>
 #include <cstdlib>
+#include <cstdio>
 
 namespace sim_logger
 {
@@ -68,8 +69,10 @@ inline void log_ground_truth(const mjData *d)
         return;
     last_t = d->time;
 
-    out << std::setprecision(9)
-        << wall_seconds() << "," << d->time
+    char wbuf[32];
+    std::snprintf(wbuf, sizeof(wbuf), "%.6f", wall_seconds());
+    out << wbuf << std::setprecision(9)
+        << "," << d->time
         << "," << d->qpos[0] << "," << d->qpos[1] << "," << d->qpos[2]
         << "," << d->qpos[3] << "," << d->qpos[4] << "," << d->qpos[5] << "," << d->qpos[6]
         << "," << d->qvel[0] << "," << d->qvel[1] << "," << d->qvel[2]
