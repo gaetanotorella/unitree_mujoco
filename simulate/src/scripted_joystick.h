@@ -48,6 +48,7 @@ public:
         std::string action;  // "", "fixstand", "rl"
         double vx = 0.0, vy = 0.0, wz = 0.0;
         double height = 0.98;
+        bool ramps = false;   // questa voce CAMBIA la quota rispetto alla precedente
     };
 
     explicit ScriptedJoystick(const std::string & path) { load(path); }
@@ -65,6 +66,7 @@ public:
 
         const Entry & e = active(t);
         const double since = t - e.t;   // < 0 solo prima della prima voce della timeline
+        if (&e != last_) { last_ = &e; over_t_ = 0.0; }   // overhold: riparte a ogni voce
 
         // --- transizioni di stato: impulso, serve il FRONTE DI SALITA (DSL `.on_pressed`) ------
         if (!e.action.empty() && since >= 0.0 && since < kPulse)
@@ -87,6 +89,26 @@ public:
         {
             B(1);
             target_ = std::min(e.height, target_ + kRiseRate * dt);
+        }
+        else if (overhold_ > 0.0 && since >= 0.0 && over_t_ < overhold_)
+        {
+            // OVERHOLD, solo alle quote di FINE CORSA. Il controller integra la rampa una volta per
+            // passo di policy con step_dt nominale 0.02, ma il suo ciclo gira a ~46 Hz: sotto-integra
+            // dell'8% e l'errore si accumula a ogni rampa (misurato: chiedendo 0.85/0.74/0.66/0.60 il
+            // controller arrivava a 0.860/0.761/0.692/0.641). Agli estremi pero' `squat_target` viene
+            // CLAMPATO: tenendo premuto oltre il necessario il controller finisce esattamente sul
+            // limite, e da li' il modello e il controller tornano allineati. Serve percio' anche a
+            // impedire che l'errore si accumuli attraverso le discese successive.
+            // solo se questa voce ha davvero CHIESTO una rampa verso un estremo: altrimenti
+            // ogni voce gia' a quota nominale (tutti i tratti di cammino in piedi) premerebbe B
+            // per nulla, sporcando il flusso del joystick.
+            const bool at_bound = (e.height <= deepest_ + 1e-6) || (e.height >= nominal_ - 1e-6);
+            if (e.ramps && at_bound)
+            {
+                over_t_ += dt;
+                if (e.height <= deepest_ + 1e-6) RT(1.0f);
+                else                             B(1);
+            }
         }
         target_ = std::clamp(target_, deepest_, nominal_);
 
@@ -121,6 +143,7 @@ private:
         nominal_ = cfg["nominal_height"] ? cfg["nominal_height"].as<double>() : 0.98;
         deepest_ = cfg["deepest_height"] ? cfg["deepest_height"].as<double>() : 0.60;
         stop_at_ = cfg["stop_at"] ? cfg["stop_at"].as<double>() : -1.0;
+        overhold_ = cfg["overhold"] ? cfg["overhold"].as<double>() : 0.0;
         target_  = nominal_;
         neutral_.height = nominal_;
         neutral_.t = -1e9;
@@ -140,7 +163,12 @@ private:
             if (n["vx"])     e.vx = n["vx"].as<double>();
             if (n["vy"])     e.vy = n["vy"].as<double>();
             if (n["wz"])     e.wz = n["wz"].as<double>();
-            if (n["height"]) e.height = n["height"].as<double>();
+            e.ramps = false;
+            if (n["height"]) {
+                const double newh = n["height"].as<double>();
+                e.ramps = std::abs(newh - cur.height) > 1e-9;
+                e.height = newh;
+            }
             if (!entries_.empty() && e.t < entries_.back().t) {
                 std::cerr << "ScriptedJoystick: timeline non ordinata a t=" << e.t << std::endl;
                 std::exit(EXIT_FAILURE);
@@ -169,7 +197,7 @@ private:
 
         std::cout << "ScriptedJoystick: protocollo '" << name_ << "', " << entries_.size()
                   << " voci, stop_at=" << stop_at_ << " s, banda rilasciata a "
-                  << scripted::g_band_release_at.load() << " s" << std::endl;
+                  << scripted::g_band_release_at.load() << " s, overhold=" << overhold_ << " s" << std::endl;
     }
 
     const Entry & active(double t) const
@@ -186,8 +214,10 @@ private:
     std::vector<Entry> entries_;
     Entry neutral_;
     mutable size_t cursor_ = 0;
+    const Entry * last_ = nullptr;
+    double over_t_ = 0.0;
     std::string name_;
-    double nominal_ = 0.98, deepest_ = 0.60, stop_at_ = -1.0;
+    double nominal_ = 0.98, deepest_ = 0.60, stop_at_ = -1.0, overhold_ = 0.0;
     double target_ = 0.98;
     double last_t_ = -1.0;
 };
