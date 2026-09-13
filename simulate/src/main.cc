@@ -487,9 +487,24 @@ namespace
                   measured = true;
                 }
 
+                // Tempo di simulazione pubblicato per il joystick scriptato: e' l'asse su cui
+                // il protocollo di test viene riprodotto (vedi scripted_joystick.h).
+                scripted::g_sim_time.store(d->time);
+
                 // elastic band on base link
                 if (param::config.enable_elastic_band == 1)
                 {
+                  // Rilascio automatico della corda: equivale al tasto 9 premuto a mano, ma a un
+                  // istante di simulazione esatto e ripetibile.
+                  const double rel = scripted::g_band_release_at.load();
+                  if (rel >= 0.0 && elastic_band.enable_ && d->time >= rel)
+                  {
+                    elastic_band.enable_ = false;
+                    d->xfrc_applied[param::config.band_attached_link + 0] = 0.0;
+                    d->xfrc_applied[param::config.band_attached_link + 1] = 0.0;
+                    d->xfrc_applied[param::config.band_attached_link + 2] = 0.0;
+                    std::cout << "[protocol] corda rilasciata a t=" << d->time << " s" << std::endl;
+                  }
                   if (elastic_band.enable_)
                   {
                     std::vector<double> x = {d->qpos[0], d->qpos[1], d->qpos[2]};
@@ -674,7 +689,21 @@ int main(int argc, char **argv)
 
   // Load simulation configuration
   std::filesystem::path proj_dir = std::filesystem::path(getExecutableDir()).parent_path();
-  param::config.load_from_yaml(proj_dir / "config.yaml");
+  {
+    // --config <file> per la procedura di test automatizzata: nessuna riscrittura del config di
+    // produzione, quindi la sessione manuale col joystick fisico resta intatta comunque vada.
+    std::string ovr = param::config_override(argc, argv);
+    if (!ovr.empty()) {
+      if (!std::filesystem::exists(ovr)) {
+        std::cerr << "Config file non trovato: " << ovr << std::endl;
+        return EXIT_FAILURE;
+      }
+      std::cout << "Config file (override): " << ovr << std::endl;
+      param::config.load_from_yaml(ovr);
+    } else {
+      param::config.load_from_yaml((proj_dir / "config.yaml").string());
+    }
+  }
   param::helper(argc, argv);
   if(param::config.robot_scene.is_relative()) {
     param::config.robot_scene = proj_dir.parent_path() / "unitree_robots" / param::config.robot / param::config.robot_scene;

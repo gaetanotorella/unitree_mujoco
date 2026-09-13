@@ -20,6 +20,9 @@ inline struct SimulationConfig
     std::string joystick_type;
     std::string joystick_device;
     int joystick_bits;
+    // joystick_type: "script" -> il joystick e' riprodotto da questo file YAML invece che letto
+    // da /dev/input/js*. Vedi scripted_joystick.h e tools/run_protocol.py.
+    std::string joystick_script;
 
     int print_scene_information;
 
@@ -39,6 +42,7 @@ inline struct SimulationConfig
             joystick_type = cfg["joystick_type"].as<std::string>();
             joystick_device = cfg["joystick_device"].as<std::string>();
             joystick_bits = cfg["joystick_bits"].as<int>();
+            joystick_script = cfg["joystick_script"] ? cfg["joystick_script"].as<std::string>() : "";
             print_scene_information = cfg["print_scene_information"].as<int>();
             enable_elastic_band = cfg["enable_elastic_band"].as<int>();
         }
@@ -53,6 +57,24 @@ inline struct SimulationConfig
 /* ---------- Command Line Parameters ---------- */
 namespace po = boost::program_options;
 
+// Pre-scansione di argv per --config/-c PRIMA di load_from_yaml.
+// Non si puo' usare boost::program_options qui: helper() scrive direttamente dentro `config`
+// tramite po::value<...>(&config.x), quindi deve girare DOPO il caricamento del file, altrimenti
+// il file sovrascriverebbe i valori passati da riga di comando. Da cui questa scansione a mano.
+//
+// PERCHE' ESISTE: la procedura di test automatizzata deve poter usare un config con il joystick
+// scriptato senza riscrivere quello di produzione, che e' lo stesso usato per le sessioni manuali.
+inline std::string config_override(int argc, char** argv)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        std::string a = argv[i];
+        if((a == "--config" || a == "-c") && i + 1 < argc) return argv[i + 1];
+        if(a.rfind("--config=", 0) == 0) return a.substr(9);
+    }
+    return "";
+}
+
 //※ This function must be called at the beginning of main() function
 inline po::variables_map helper(int argc, char** argv)
 {
@@ -63,6 +85,7 @@ inline po::variables_map helper(int argc, char** argv)
         ("network,n", po::value<std::string>(&config.interface), "DDS network interface; -n eth0")
         ("robot,r", po::value<std::string>(&config.robot), "Robot type; -r go2")
         ("scene,s", po::value<std::filesystem::path>(&config.robot_scene), "Robot scene file; -s scene_terrain.xml")
+        ("config,c", po::value<std::string>(), "config.yaml alternativo; gia' letto prima di qui")
     ;
 
     po::variables_map vm;

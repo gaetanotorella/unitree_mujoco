@@ -13,6 +13,7 @@
 
 #include "param.h"
 #include "physics_joystick.h"
+#include "scripted_joystick.h"
 
 #define MOTOR_SENSOR_NUM 3
 
@@ -31,6 +32,12 @@ public:
                 joystick = std::make_shared<XBoxJoystick>(param::config.joystick_device, param::config.joystick_bits);
             } else if(param::config.joystick_type == "switch") {
                 joystick  = std::make_shared<SwitchJoystick>(param::config.joystick_device, param::config.joystick_bits);
+            } else if(param::config.joystick_type == "script") {
+                if(param::config.joystick_script.empty()) {
+                    std::cerr << "joystick_type: script richiede joystick_script: <file.yaml>" << std::endl;
+                    exit(EXIT_FAILURE);
+                }
+                joystick = std::make_shared<ScriptedJoystick>(param::config.joystick_script);
             } else {
                 std::cerr << "Unsupported joystick type: " << param::config.joystick_type << std::endl;
                 exit(EXIT_FAILURE);
