@@ -23,6 +23,9 @@ inline struct SimulationConfig
     // joystick_type: "script" -> il joystick e' riprodotto da questo file YAML invece che letto
     // da /dev/input/js*. Vedi scripted_joystick.h e tools/run_protocol.py.
     std::string joystick_script;
+    // File YAML con la chiave `presets:`: spinte manuali legate a tasti della finestra MuJoCo
+    // (vedi push_disturbance.h). Vuoto = disattivato.
+    std::string disturbance_script;
 
     int print_scene_information;
 
@@ -43,6 +46,7 @@ inline struct SimulationConfig
             joystick_device = cfg["joystick_device"].as<std::string>();
             joystick_bits = cfg["joystick_bits"].as<int>();
             joystick_script = cfg["joystick_script"] ? cfg["joystick_script"].as<std::string>() : "";
+            disturbance_script = cfg["disturbance_script"] ? cfg["disturbance_script"].as<std::string>() : "";
             print_scene_information = cfg["print_scene_information"].as<int>();
             enable_elastic_band = cfg["enable_elastic_band"].as<int>();
         }

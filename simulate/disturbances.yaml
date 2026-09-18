@@ -1,0 +1,19 @@
+# Spinte MANUALI per il test di robustezza della policy (vedi src/push_disturbance.h).
+# Attive se config.yaml ha `disturbance_script: "disturbances.yaml"`. Con la finestra di MuJoCo
+# in primo piano, premi il tasto: la spinta parte subito e viene loggata in
+# sim_logs/sim_<ts>/disturbance_events.csv (analisi: Squat_Unitree_H1_2/tools/report_pushes.py).
+#
+# force in N, torque in N.m, dur in s (0 = un solo passo fisico). frame: body (default) = "avanti"
+# e' l'avanti del robot; world = assi del mondo. point: metri nel riferimento del corpo, default
+# baricentro. 20 N.s su 79.5 kg = 0.25 m/s di variazione di velocita' del baricentro.
+# I tasti 7, 8, 9 sono della corda elastica: non usarli.
+presets:
+  - {key: "1", body: torso_link, force: [ 100,    0, 0], dur: 0.2}   # 20 N.s avanti
+  - {key: "2", body: torso_link, force: [-100,    0, 0], dur: 0.2}   # 20 N.s indietro
+  - {key: "3", body: torso_link, force: [   0,  100, 0], dur: 0.2}   # 20 N.s a sinistra
+  - {key: "4", body: torso_link, force: [   0, -100, 0], dur: 0.2}   # 20 N.s a destra
+  - {key: "5", body: torso_link, force: [ 150,    0, 0], dur: 0.2}   # 30 N.s avanti
+  - {key: "6", body: torso_link, force: [-150,    0, 0], dur: 0.2}   # 30 N.s indietro
+  - {key: "Q", body: pelvis,     torque: [0, 0,  30],    dur: 0.2}   # coppia di imbardata +
+  - {key: "W", body: pelvis,     torque: [0, 0, -30],    dur: 0.2}   # coppia di imbardata -
+  - {key: "E", body: torso_link, force: [  60,    0, 0], dur: 2.0}   # spinta continua 2 s avanti (60 N)

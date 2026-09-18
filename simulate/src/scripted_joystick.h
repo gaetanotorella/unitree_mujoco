@@ -59,20 +59,28 @@ public:
         const double dt = (last_t_ < 0.0) ? 0.0 : std::max(0.0, t - last_t_);
         last_t_ = t;
 
-        // tutto rilasciato di default: ogni ciclo riscrive lo stato completo
-        back(0); start(0); LB(0); RB(0); A(0); B(0); X(0); Y(0);
-        up(0); down(0); left(0); right(0);
-        LT(0.0f); RT(0.0f);
+        // Stato dei tasti calcolato PRIMA, poi ogni setter viene chiamato UNA volta sola in fondo.
+        // LT e RT sono `Axis` con filtro EMA (x <- 0.97 x + 0.03 new): chiamare RT(0) e poi RT(1)
+        // nello stesso ciclo significa due aggiornamenti, e il punto fisso diventa
+        // 0.03/(1-0.97^2) = 0.508 -- esattamente sulla soglia 0.5 con cui il controller decide
+        // R2.pressed. Il bit sfarfallava e la rampa di quota del controller andava a 1/3 della
+        // velocita' nominale (misurato: 0.050 m/s invece di 0.15). Era anche la vera causa dello
+        // "scarto del banco" attribuito a torto al ciclo del controller.
+        bool bLT = false, bRT = false, bB = false, bUp = false, bRB = false, bX = false;
 
         const Entry & e = active(t);
         const double since = t - e.t;   // < 0 solo prima della prima voce della timeline
         if (&e != last_) { last_ = &e; over_t_ = 0.0; }   // overhold: riparte a ogni voce
 
         // --- transizioni di stato: impulso, serve il FRONTE DI SALITA (DSL `.on_pressed`) ------
+        // Il DSL del controller vuole `LT + up.on_pressed`: il MODIFICATORE gia' premuto (LT e' un
+        // Axis con EMA, supera 0.5 dopo ~23 ms) e il FRONTE del tasto. Quindi prima il modificatore
+        // per tutto l'impulso, e il tasto solo dopo kModifierLead -- come fa una mano.
         if (!e.action.empty() && since >= 0.0 && since < kPulse)
         {
-            if (e.action == "fixstand") { LT(1.0f); up(1); }   // Passive -> FixStand: LT + up
-            else if (e.action == "rl")  { RB(1);    X(1);  }   // FixStand -> Squat:   RB + X
+            const bool btn = since >= kModifierLead;
+            if (e.action == "fixstand") { bLT = true; bUp = btn; }   // Passive -> FixStand: LT + up
+            else if (e.action == "rl")  { bRB = true; bX = btn;  }   // FixStand -> Squat:   RB + X
         }
 
         // --- quota: RT per scendere, B per salire, fino a raggiungere il target -----------------
@@ -82,12 +90,12 @@ public:
         // esattamente la grandezza che stiamo misurando.
         if (target_ > e.height + kHeightEps)
         {
-            RT(1.0f);
+            bRT = true;
             target_ = std::max(e.height, target_ - kDescendRate * dt);
         }
         else if (target_ < e.height - kHeightEps)
         {
-            B(1);
+            bB = true;
             target_ = std::min(e.height, target_ + kRiseRate * dt);
         }
         else if (overhold_ > 0.0 && since >= 0.0 && over_t_ < overhold_)
@@ -106,11 +114,16 @@ public:
             if (e.ramps && at_bound)
             {
                 over_t_ += dt;
-                if (e.height <= deepest_ + 1e-6) RT(1.0f);
-                else                             B(1);
+                if (e.height <= deepest_ + 1e-6) bRT = true;
+                else                             bB = true;
             }
         }
         target_ = std::clamp(target_, deepest_, nominal_);
+
+        // --- scrittura dello stato: UNA chiamata per tasto/asse per ciclo ---------------------
+        back(0); start(0); LB(0); A(0); Y(0); down(0); left(0); right(0);
+        LT(bLT ? 1.0f : 0.0f); RT(bRT ? 1.0f : 0.0f);
+        up(bUp ? 1 : 0); RB(bRB ? 1 : 0); X(bX ? 1 : 0); B(bB ? 1 : 0);
 
         // --- levette -----------------------------------------------------------------------
         // Mappatura dal controller (observations.h):  obs = [ly, -lx, -rx]
@@ -125,9 +138,15 @@ public:
     double stop_at() const { return stop_at_; }
 
 private:
-    static constexpr double kPulse = 0.30;        // durata dell'impulso di transizione [s]
-    static constexpr double kDescendRate = 0.15;  // = descend_rate in observations.h
-    static constexpr double kRiseRate = 0.15;     // = rise_rate   in observations.h
+    static constexpr double kPulse = 0.40;        // durata dell'impulso di transizione [s]
+    static constexpr double kModifierLead = 0.15; // il tasto arriva dopo il modificatore [s]
+    // Rampe del target di quota: DEVONO essere uguali a descend_rate / rise_rate nel controller
+    // (deploy/include/isaaclab/envs/mdp/observations.h). Non sono costanti qui dentro ma chiavi del
+    // protocollo (`descend_rate`, `rise_rate`), perche' quando il controller e' passato da 0.15 a
+    // 0.05 m/s (commit 7e3bb51) il modello qui e' rimasto a 0.15 e le quote comandate sono
+    // arrivate a un terzo (0.903 invece di 0.75). Se mancano nel YAML si usa 0.05 con un avviso.
+    double kDescendRate = 0.05;
+    double kRiseRate = 0.05;
     static constexpr double kHeightEps = 1e-4;
 
     void load(const std::string & path)
@@ -144,6 +163,12 @@ private:
         deepest_ = cfg["deepest_height"] ? cfg["deepest_height"].as<double>() : 0.60;
         stop_at_ = cfg["stop_at"] ? cfg["stop_at"].as<double>() : -1.0;
         overhold_ = cfg["overhold"] ? cfg["overhold"].as<double>() : 0.0;
+        if (cfg["descend_rate"]) kDescendRate = cfg["descend_rate"].as<double>();
+        if (cfg["rise_rate"])    kRiseRate    = cfg["rise_rate"].as<double>();
+        if (!cfg["descend_rate"] || !cfg["rise_rate"])
+            std::cout << "ScriptedJoystick: ATTENZIONE, descend_rate/rise_rate assenti dal protocollo: uso "
+                      << kDescendRate << "/" << kRiseRate << " m/s. Devono coincidere con observations.h del controller."
+                      << std::endl;
         target_  = nominal_;
         neutral_.height = nominal_;
         neutral_.t = -1e9;
@@ -197,7 +222,8 @@ private:
 
         std::cout << "ScriptedJoystick: protocollo '" << name_ << "', " << entries_.size()
                   << " voci, stop_at=" << stop_at_ << " s, banda rilasciata a "
-                  << scripted::g_band_release_at.load() << " s, overhold=" << overhold_ << " s" << std::endl;
+                  << scripted::g_band_release_at.load() << " s, overhold=" << overhold_ << " s, rampe "
+                  << kDescendRate << "/" << kRiseRate << " m/s" << std::endl;
     }
 
     const Entry & active(double t) const

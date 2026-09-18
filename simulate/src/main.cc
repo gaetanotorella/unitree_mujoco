@@ -35,6 +35,7 @@
 #include "unitree_sdk2_bridge.h"
 #include "param.h"
 #include "state_logger.h"
+#include "push_disturbance.h"
 
 #define MUJOCO_PLUGIN_DIR "mujoco_plugin"
 #define NUM_MOTOR_IDL_GO 20
@@ -518,6 +519,12 @@ namespace
                   }
                 }
 
+                // Spinte manuali: dopo la banda, prima di mj_step (vedi push_disturbance.h).
+                if (!pushes::g_pushes.empty())
+                  pushes::g_pushes.apply(m, d, sim_logger::g_run_dir,
+                                         param::config.band_attached_link / 6,
+                                         param::config.enable_elastic_band == 1 && elastic_band.enable_);
+
                 // call mj_step
                 mj_step(m, d);
                 stepped = true;
@@ -609,6 +616,13 @@ void *UnitreeSdk2BridgeThread(void *arg)
     body_id = mj_name2id(m, mjOBJ_BODY, "base_link");
   }
   param::config.band_attached_link = 6 * body_id;
+
+  // Spinte manuali da tastiera (test di robustezza): preset in `disturbance_script`, se indicato.
+  if (!param::config.disturbance_script.empty()) {
+    std::filesystem::path dp = param::config.disturbance_script;
+    if (dp.is_relative()) dp = std::filesystem::path(getExecutableDir()).parent_path() / dp;  // relativo a simulate/, come config.yaml
+    pushes::g_pushes.load(dp.string(), m);
+  }
   
   std::unique_ptr<UnitreeSDK2BridgeBase> interface = nullptr;
   if (m->nu > NUM_MOTOR_IDL_GO) {
@@ -651,6 +665,10 @@ void user_key_cb(GLFWwindow* window, int key, int scancode, int act, int mods) {
     if(key==GLFW_KEY_BACKSPACE) {
       mj_resetData(m, d);
       mj_forward(m, d);
+    }
+    // spinte manuali: i tasti dei preset (GLFW usa il codice ASCII maiuscolo)
+    if(!pushes::g_pushes.empty() && d) {
+      pushes::g_pushes.trigger(key, d->time);
     }
   }
 }
