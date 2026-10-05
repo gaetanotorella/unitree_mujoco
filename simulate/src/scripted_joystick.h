@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <string>
@@ -48,14 +49,20 @@ public:
         std::string action;  // "", "fixstand", "rl"
         double vx = 0.0, vy = 0.0, wz = 0.0;
         double height = 0.98;
-        bool ramps = false;   // questa voce CAMBIA la quota rispetto alla precedente
     };
 
     explicit ScriptedJoystick(const std::string & path) { load(path); }
 
     void update() override
     {
-        const double t = scripted::g_sim_time.load();
+        // Orologio del protocollo. Di default il tempo di SIMULAZIONE. Con `clock: wall_after_rl`
+        // (replay di un esperimento reale) dal fronte di X dell'azione `rl` in poi il tempo avanza
+        // con l'orologio di PARETE: il controller scandisce i passi di policy sull'orologio di parete
+        // (sleep_until a 50 Hz), mentre la simulazione gira a rtf ~0.9995 -- su 270 s sarebbero
+        // ~135 ms, 7 passi di policy, di deriva fra i comandi e i passi che li devono ricevere.
+        double t = scripted::g_sim_time.load();
+        if (wall_anchored_)
+            t = anchor_t_ + std::chrono::duration<double>(std::chrono::steady_clock::now() - anchor_wall_).count();
         const double dt = (last_t_ < 0.0) ? 0.0 : std::max(0.0, t - last_t_);
         last_t_ = t;
 
@@ -70,7 +77,6 @@ public:
 
         const Entry & e = active(t);
         const double since = t - e.t;   // < 0 solo prima della prima voce della timeline
-        if (&e != last_) { last_ = &e; over_t_ = 0.0; }   // overhold: riparte a ogni voce
 
         // --- transizioni di stato: impulso, serve il FRONTE DI SALITA (DSL `.on_pressed`) ------
         // Il DSL del controller vuole `LT + up.on_pressed`: il MODIFICATORE gia' premuto (LT e' un
@@ -81,6 +87,13 @@ public:
             const bool btn = since >= kModifierLead;
             if (e.action == "fixstand") { bLT = true; bUp = btn; }   // Passive -> FixStand: LT + up
             else if (e.action == "rl")  { bRB = true; bX = btn;  }   // FixStand -> Squat:   RB + X
+            // ancora dell'orologio di parete: il fronte di X, cioe' l'ingresso in RL del controller
+            if (wall_after_rl_ && !wall_anchored_ && e.action == "rl" && btn) {
+                wall_anchored_ = true;
+                anchor_t_ = e.t + kModifierLead;
+                anchor_wall_ = std::chrono::steady_clock::now();
+                t = anchor_t_;
+            }
         }
 
         // --- quota: RT per scendere, B per salire, fino a raggiungere il target -----------------
@@ -88,35 +101,36 @@ public:
         // L'anello si chiude sul MODELLO del target, non sull'altezza misurata: cosi' il comando
         // e' riproducibile per costruzione e non dipende da come la policy risponde -- che e'
         // esattamente la grandezza che stiamo misurando.
+        const bool was_moving = moving_;
+        moving_ = false;
         if (target_ > e.height + kHeightEps)
         {
-            bRT = true;
+            bRT = true; moving_ = true;
             target_ = std::max(e.height, target_ - kDescendRate * dt);
         }
         else if (target_ < e.height - kHeightEps)
         {
-            bB = true;
+            bB = true; moving_ = true;
             target_ = std::min(e.height, target_ + kRiseRate * dt);
         }
-        else if (overhold_ > 0.0 && since >= 0.0 && over_t_ < overhold_)
+        else
         {
-            // OVERHOLD, solo alle quote di FINE CORSA. Il controller integra la rampa una volta per
-            // passo di policy con step_dt nominale 0.02, ma il suo ciclo gira a ~46 Hz: sotto-integra
-            // dell'8% e l'errore si accumula a ogni rampa (misurato: chiedendo 0.85/0.74/0.66/0.60 il
-            // controller arrivava a 0.860/0.761/0.692/0.641). Agli estremi pero' `squat_target` viene
-            // CLAMPATO: tenendo premuto oltre il necessario il controller finisce esattamente sul
-            // limite, e da li' il modello e il controller tornano allineati. Serve percio' anche a
-            // impedire che l'errore si accumuli attraverso le discese successive.
-            // solo se questa voce ha davvero CHIESTO una rampa verso un estremo: altrimenti
-            // ogni voce gia' a quota nominale (tutti i tratti di cammino in piedi) premerebbe B
-            // per nulla, sporcando il flusso del joystick.
-            const bool at_bound = (e.height <= deepest_ + 1e-6) || (e.height >= nominal_ - 1e-6);
-            if (e.ramps && at_bound)
+            // OVERHOLD all'ARRIVO a un fine corsa: il tasto resta premuto `overhold` secondi in piu'.
+            // Li' il controller CLAMPA `squat_target`, quindi finisce esattamente sul limite qualunque
+            // fosse lo scarto accumulato (+-1 passo di policy per ogni inizio/fine rampa, perche' il
+            // joystick gira sul tempo di simulazione e il controller sul suo orologio) e modello e
+            // controller tornano allineati. Scatta sull'ARRIVO e non sulla voce della timeline, cosi'
+            // funziona sia con timeline rade (standard_v2: una voce per quota) sia dense (replay di
+            // un esperimento reale: una voce ogni 20 ms), e non preme mai nulla se la quota non si e'
+            // mossa (niente B spuri durante il cammino in piedi).
+            const bool low = e.height <= deepest_ + 1e-6, high = e.height >= nominal_ - 1e-6;
+            if (was_moving && (low || high)) over_left_ = overhold_;
+            if (over_left_ > 0.0 && (low || high))
             {
-                over_t_ += dt;
-                if (e.height <= deepest_ + 1e-6) bRT = true;
-                else                             bB = true;
+                over_left_ -= dt;
+                if (low) bRT = true; else bB = true;
             }
+            else over_left_ = 0.0;
         }
         target_ = std::clamp(target_, deepest_, nominal_);
 
@@ -163,6 +177,19 @@ private:
         deepest_ = cfg["deepest_height"] ? cfg["deepest_height"].as<double>() : 0.60;
         stop_at_ = cfg["stop_at"] ? cfg["stop_at"].as<double>() : -1.0;
         overhold_ = cfg["overhold"] ? cfg["overhold"].as<double>() : 0.0;
+        // `stick_smoothing: false` -> levette E grilletti (LT/RT) NON passano dal filtro EMA lato
+        // simulatore. Serve al replay di un esperimento reale: sul robot il pacchetto del
+        // radiocomando arriva al controller SENZA filtri, e l'unico filtro EMA e' quello del
+        // controller (che c'e' anche in sim). Lasciare anche quello del simulatore raddoppiava il
+        // ritardo: le levette di ~33 ms, e RT di ~23 ms -> ogni discesa partiva un passo dopo
+        // (misurato con l'emulatore della catena completa). I comandi registrati sono gia' l'uscita
+        // del filtro del controller: il replay lo pre-compensa sulle levette.
+        if (cfg["stick_smoothing"] && !cfg["stick_smoothing"].as<bool>()) {
+            lx.smooth = ly.smooth = rx.smooth = ry.smooth = 1.0f;
+            LT.smooth = RT.smooth = 1.0f;
+            stick_raw_ = true;
+        }
+        wall_after_rl_ = cfg["clock"] && cfg["clock"].as<std::string>() == "wall_after_rl";
         if (cfg["descend_rate"]) kDescendRate = cfg["descend_rate"].as<double>();
         if (cfg["rise_rate"])    kRiseRate    = cfg["rise_rate"].as<double>();
         if (!cfg["descend_rate"] || !cfg["rise_rate"])
@@ -188,12 +215,7 @@ private:
             if (n["vx"])     e.vx = n["vx"].as<double>();
             if (n["vy"])     e.vy = n["vy"].as<double>();
             if (n["wz"])     e.wz = n["wz"].as<double>();
-            e.ramps = false;
-            if (n["height"]) {
-                const double newh = n["height"].as<double>();
-                e.ramps = std::abs(newh - cur.height) > 1e-9;
-                e.height = newh;
-            }
+            if (n["height"]) e.height = n["height"].as<double>();
             if (!entries_.empty() && e.t < entries_.back().t) {
                 std::cerr << "ScriptedJoystick: timeline non ordinata a t=" << e.t << std::endl;
                 std::exit(EXIT_FAILURE);
@@ -211,6 +233,7 @@ private:
         // messa li' per un difetto del pad). Il joystick scriptato NON la applica -- iniettare
         // valori esatti e' meglio e toglie una fonte di varianza -- ma un valore in quella fascia
         // non sarebbe riproducibile a mano, quindi va saputo.
+        if (!stick_raw_)
         for (const auto & e : entries_)
             for (double v : {e.vx, e.vy, e.wz})
                 if (std::abs(v) > 1e-9 && std::abs(v) < 0.15) {
@@ -223,7 +246,9 @@ private:
         std::cout << "ScriptedJoystick: protocollo '" << name_ << "', " << entries_.size()
                   << " voci, stop_at=" << stop_at_ << " s, banda rilasciata a "
                   << scripted::g_band_release_at.load() << " s, overhold=" << overhold_ << " s, rampe "
-                  << kDescendRate << "/" << kRiseRate << " m/s" << std::endl;
+                  << kDescendRate << "/" << kRiseRate << " m/s"
+                  << (wall_after_rl_ ? ", orologio di parete dopo RL" : "")
+                  << (stick_raw_ ? ", levette senza filtro" : "") << std::endl;
     }
 
     const Entry & active(double t) const
@@ -240,8 +265,12 @@ private:
     std::vector<Entry> entries_;
     Entry neutral_;
     mutable size_t cursor_ = 0;
-    const Entry * last_ = nullptr;
-    double over_t_ = 0.0;
+    bool wall_after_rl_ = false, wall_anchored_ = false;
+    double anchor_t_ = 0.0;
+    std::chrono::steady_clock::time_point anchor_wall_;
+    bool moving_ = false;
+    double over_left_ = 0.0;
+    bool stick_raw_ = false;
     std::string name_;
     double nominal_ = 0.98, deepest_ = 0.60, stop_at_ = -1.0, overhold_ = 0.0;
     double target_ = 0.98;
