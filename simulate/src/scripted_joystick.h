@@ -73,7 +73,7 @@ public:
         // R2.pressed. Il bit sfarfallava e la rampa di quota del controller andava a 1/3 della
         // velocita' nominale (misurato: 0.050 m/s invece di 0.15). Era anche la vera causa dello
         // "scarto del banco" attribuito a torto al ciclo del controller.
-        bool bLT = false, bRT = false, bB = false, bUp = false, bRB = false, bX = false;
+        bool bLT = false, bRT = false, bB = false, bUp = false, bRB = false, bX = false, bA = false;
 
         const Entry & e = active(t);
         const double since = t - e.t;   // < 0 solo prima della prima voce della timeline
@@ -101,16 +101,24 @@ public:
         // L'anello si chiude sul MODELLO del target, non sull'altezza misurata: cosi' il comando
         // e' riproducibile per costruzione e non dipende da come la policy risponde -- che e'
         // esattamente la grandezza che stiamo misurando.
-        const bool was_moving = moving_;
+        //
+        // FERMO del controller (`stop_height` nel protocollo, = cutoff_height + 1 cm): R2 da solo si
+        // ferma li', per scendere oltre serve A + R2. Con la chiave il modello fa come una mano: RT
+        // fino al fermo, poi A + RT. Senza la chiave (v1, v2, smoke, replay degli esperimenti reali
+        // registrati prima del fermo) A resta premuto insieme a RT in ogni discesa: e' esattamente il
+        // controller di prima, quindi quei protocolli comandano ancora le stesse quote.
+        const bool was_moving = moving_, was_down = moving_down_;
         moving_ = false;
         if (target_ > e.height + kHeightEps)
         {
-            bRT = true; moving_ = true;
-            target_ = std::max(e.height, target_ - kDescendRate * dt);
+            bRT = true; moving_ = true; moving_down_ = true;
+            const bool past_stop = !has_stop_ || target_ <= stop_ + kHeightEps;
+            bA = past_stop;
+            target_ = std::max(past_stop ? e.height : std::max(e.height, stop_), target_ - kDescendRate * dt);
         }
         else if (target_ < e.height - kHeightEps)
         {
-            bB = true; moving_ = true;
+            bB = true; moving_ = true; moving_down_ = false;
             target_ = std::min(e.height, target_ + kRiseRate * dt);
         }
         else
@@ -123,19 +131,28 @@ public:
             // funziona sia con timeline rade (standard_v2: una voce per quota) sia dense (replay di
             // un esperimento reale: una voce ogni 20 ms), e non preme mai nulla se la quota non si e'
             // mossa (niente B spuri durante il cammino in piedi).
+            // Il fermo del controller e' un terzo fine corsa, ma solo arrivandoci DALL'ALTO: li' R2 da
+            // solo clampa. Arrivandoci da sotto, R2 da solo non muove nulla e non riallinea niente.
             const bool low = e.height <= deepest_ + 1e-6, high = e.height >= nominal_ - 1e-6;
-            if (was_moving && (low || high)) over_left_ = overhold_;
-            if (over_left_ > 0.0 && (low || high))
+            const bool at_stop = has_stop_ && std::abs(e.height - stop_) < 1e-6;
+            if (was_moving)
+            {
+                over_left_ = overhold_;
+                over_key_ = low ? 'L' : high ? 'H' : (at_stop && was_down) ? 'S' : 0;
+            }
+            if (over_left_ > 0.0 && over_key_)
             {
                 over_left_ -= dt;
-                if (low) bRT = true; else bB = true;
+                if (over_key_ == 'H') bB = true;
+                else { bRT = true; bA = (over_key_ == 'L'); }   // sotto il fermo R2 da solo non scende
             }
             else over_left_ = 0.0;
         }
         target_ = std::clamp(target_, deepest_, nominal_);
 
         // --- scrittura dello stato: UNA chiamata per tasto/asse per ciclo ---------------------
-        back(0); start(0); LB(0); A(0); Y(0); down(0); left(0); right(0);
+        back(0); start(0); LB(0); Y(0); down(0); left(0); right(0);
+        A(bA ? 1 : 0);
         LT(bLT ? 1.0f : 0.0f); RT(bRT ? 1.0f : 0.0f);
         up(bUp ? 1 : 0); RB(bRB ? 1 : 0); X(bX ? 1 : 0); B(bB ? 1 : 0);
 
@@ -196,6 +213,17 @@ private:
             std::cout << "ScriptedJoystick: ATTENZIONE, descend_rate/rise_rate assenti dal protocollo: uso "
                       << kDescendRate << "/" << kRiseRate << " m/s. Devono coincidere con observations.h del controller."
                       << std::endl;
+        // fermo del controller: deve valere cutoff_height + 1 cm del deploy.yaml della policy
+        // (run_protocol.py lo verifica prima di partire). Assente = protocollo scritto prima del fermo.
+        has_stop_ = static_cast<bool>(cfg["stop_height"]);
+        if (has_stop_) {
+            stop_ = cfg["stop_height"].as<double>();
+            if (stop_ <= deepest_ || stop_ >= nominal_) {
+                std::cerr << "ScriptedJoystick: stop_height " << stop_ << " fuori da (" << deepest_ << ", "
+                          << nominal_ << ")" << std::endl;
+                std::exit(EXIT_FAILURE);
+            }
+        }
         target_  = nominal_;
         neutral_.height = nominal_;
         neutral_.t = -1e9;
@@ -247,6 +275,8 @@ private:
                   << " voci, stop_at=" << stop_at_ << " s, banda rilasciata a "
                   << scripted::g_band_release_at.load() << " s, overhold=" << overhold_ << " s, rampe "
                   << kDescendRate << "/" << kRiseRate << " m/s"
+                  << (has_stop_ ? ", fermo a " + std::to_string(stop_) + " m (RT fino al fermo, poi A + RT)"
+                                : std::string(", A premuto con RT (protocollo senza fermo)"))
                   << (wall_after_rl_ ? ", orologio di parete dopo RL" : "")
                   << (stick_raw_ ? ", levette senza filtro" : "") << std::endl;
     }
@@ -268,8 +298,11 @@ private:
     bool wall_after_rl_ = false, wall_anchored_ = false;
     double anchor_t_ = 0.0;
     std::chrono::steady_clock::time_point anchor_wall_;
-    bool moving_ = false;
+    bool moving_ = false, moving_down_ = false;
     double over_left_ = 0.0;
+    char over_key_ = 0;   // overhold in corso: 'L' fondo (A + RT), 'S' fermo (RT), 'H' in piedi (B)
+    bool has_stop_ = false;
+    double stop_ = 0.0;
     bool stick_raw_ = false;
     std::string name_;
     double nominal_ = 0.98, deepest_ = 0.60, stop_at_ = -1.0, overhold_ = 0.0;
